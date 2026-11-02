@@ -84,11 +84,7 @@ def process_delivery(delivery: VcsDelivery) -> None:
                 "state": (
                     VcsPullRequest.STATE_MERGED
                     if parsed.action == "merged"
-                    else (
-                        VcsPullRequest.STATE_CLOSED
-                        if parsed.action == "closed"
-                        else VcsPullRequest.STATE_OPEN
-                    )
+                    else (VcsPullRequest.STATE_CLOSED if parsed.action == "closed" else VcsPullRequest.STATE_OPEN)
                 ),
                 "merged_at": parsed.merged_at,
                 "provider_updated_at": parsed.updated_at,
@@ -147,9 +143,7 @@ def process_delivery(delivery: VcsDelivery) -> None:
 
     resolved_keys = {(issue.project.identifier, issue.sequence_id) for issue, _ in resolved_pairs}
     unresolved = [
-        f"{m.identifier}-{m.sequence_id}"
-        for m in matched_ids
-        if (m.identifier, m.sequence_id) not in resolved_keys
+        f"{m.identifier}-{m.sequence_id}" for m in matched_ids if (m.identifier, m.sequence_id) not in resolved_keys
     ]
     unresolved = list(dict.fromkeys(unresolved))
 
@@ -173,7 +167,7 @@ def process_delivery(delivery: VcsDelivery) -> None:
 
         try:
             with transaction.atomic():
-                locked_issue = Issue.issue_objects.select_for_update().get(pk=issue_item.pk)
+                locked_issue = Issue.issue_objects.select_for_update(of=("self",)).get(pk=issue_item.pk)
 
                 link, link_created = VcsPullRequestLink.objects.get_or_create(
                     pull_request=pr,
@@ -196,7 +190,7 @@ def process_delivery(delivery: VcsDelivery) -> None:
 
                 linked_prs = VcsPullRequestLink.objects.filter(issue=locked_issue).select_related("pull_request")
                 all_linked_merged = linked_prs.exists() and all(
-                    l.pull_request.state == VcsPullRequest.STATE_MERGED for l in linked_prs
+                    link.pull_request.state == VcsPullRequest.STATE_MERGED for link in linked_prs
                 )
 
                 if proj_settings and proj_settings.overrides:

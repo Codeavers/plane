@@ -12,6 +12,9 @@ class ProviderRegistry:
     def register(self, provider: VcsProvider) -> None:
         self._providers[provider.key] = provider
 
+    def __contains__(self, key: object) -> bool:
+        return key in self._providers
+
     def get(self, key: str) -> VcsProvider:
         if key not in self._providers:
             raise KeyError(f"VCS provider '{key}' not found")
