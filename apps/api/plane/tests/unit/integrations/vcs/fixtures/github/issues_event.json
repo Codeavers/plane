@@ -1,0 +1,25 @@
+{
+  "action": "opened",
+  "issue": {
+    "id": 2100000001,
+    "number": 10,
+    "title": "Unrelated GitHub issue CODEA-40",
+    "body": "Fixes CODEA-40",
+    "state": "open",
+    "html_url": "https://github.com/Codeavers/plane/issues/10",
+    "user": {
+      "login": "octocat",
+      "id": 583231
+    }
+  },
+  "repository": {
+    "id": 800000001,
+    "name": "plane",
+    "full_name": "Codeavers/plane",
+    "private": true
+  },
+  "sender": {
+    "login": "octocat",
+    "id": 583231
+  }
+}
