@@ -11,6 +11,19 @@ from plane.integrations.vcs.events import PingEvent, PullRequestEvent
 
 class VcsProvider(ABC):
     key: str
+    name: str = ""
+
+    def settings_schema(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "version": {"type": "integer"},
+                "matchers": {"type": "array"},
+                "base_branches": {"type": "array"},
+                "rules": {"type": "array"},
+                "comment_templates": {"type": "object"},
+            },
+        }
 
     @abstractmethod
     def verify(self, headers: Mapping[str, str], raw_body: bytes, secret: str) -> bool:

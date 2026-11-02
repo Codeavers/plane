@@ -6,7 +6,8 @@ import dataclasses
 import fnmatch
 from typing import Any
 
-from django.db import transaction
+from celery.exceptions import SoftTimeLimitExceeded
+from django.db import InterfaceError, OperationalError, transaction
 from django.utils import timezone
 
 from plane.db.models import Issue
@@ -22,6 +23,7 @@ from plane.integrations.vcs.matchers import extract_ids, resolve_work_items
 from plane.integrations.vcs.providers.registry import registry
 from plane.integrations.vcs.rules import RuleContext, select_actions
 from plane.integrations.vcs.settings import DEFAULT_SETTINGS, merge_settings
+from plane.utils.exception_logger import log_exception
 
 
 def process_delivery(delivery: VcsDelivery) -> None:
@@ -35,13 +37,27 @@ def process_delivery(delivery: VcsDelivery) -> None:
         delivery.save(update_fields=["status", "error", "processed_at", "attempts", "updated_at"])
         return
 
+    if not connection.is_active:
+        delivery.status = VcsDelivery.STATUS_IGNORED
+        delivery.summary = {"reason": "connection inactive"}
+        delivery.processed_at = timezone.now()
+        delivery.save(update_fields=["status", "summary", "processed_at", "attempts", "updated_at"])
+        return
+
     provider = registry.get(connection.provider)
     headers = {
         "X-GitHub-Event": delivery.event,
         "X-Event-Key": delivery.event,
         "X-Gitlab-Event": delivery.event,
     }
-    parsed = provider.parse(headers, delivery.payload)
+    try:
+        parsed = provider.parse(headers, delivery.payload)
+    except (ValueError, KeyError, TypeError) as e:
+        delivery.status = VcsDelivery.STATUS_FAILED
+        delivery.error = f"malformed payload: {e}"
+        delivery.processed_at = timezone.now()
+        delivery.save(update_fields=["status", "error", "processed_at", "attempts", "updated_at"])
+        return
 
     if isinstance(parsed, PingEvent):
         now = timezone.now()
@@ -59,10 +75,8 @@ def process_delivery(delivery: VcsDelivery) -> None:
         return
 
     if connection.repo_filter:
-        repo_matched = any(
-            fnmatch.fnmatchcase(parsed.repo_full_name, pat) or fnmatch.fnmatch(parsed.repo_full_name, pat)
-            for pat in connection.repo_filter
-        )
+        repo_name = parsed.repo_full_name.lower()
+        repo_matched = any(fnmatch.fnmatchcase(repo_name, pat.lower()) for pat in connection.repo_filter)
         if not repo_matched:
             delivery.status = VcsDelivery.STATUS_IGNORED
             delivery.processed_at = timezone.now()
@@ -148,6 +162,7 @@ def process_delivery(delivery: VcsDelivery) -> None:
     unresolved = list(dict.fromkeys(unresolved))
 
     work_items_summary: dict[str, Any] = {}
+    failed_count = 0
 
     for issue_item, matched_id in resolved_pairs:
         issue_id_str = str(issue_item.id)
@@ -239,11 +254,14 @@ def process_delivery(delivery: VcsDelivery) -> None:
                     "identifier": work_item_ident,
                     "results": results,
                 }
+        except (OperationalError, InterfaceError, SoftTimeLimitExceeded):
+            raise
         except Exception as e:
+            log_exception(e)
+            failed_count += 1
             work_items_summary[issue_id_str] = {
                 "identifier": work_item_ident,
-                "results": [{"status": "failed", "detail": str(e)}],
-                "error": str(e),
+                "results": [{"type": "error", "status": "failed", "detail": f"{type(e).__name__}: {e}"}],
             }
 
     delivery.summary = {
@@ -252,5 +270,5 @@ def process_delivery(delivery: VcsDelivery) -> None:
     }
     delivery.status = VcsDelivery.STATUS_PROCESSED
     delivery.processed_at = timezone.now()
-    delivery.error = ""
+    delivery.error = f"{failed_count} work item(s) failed" if failed_count else ""
     delivery.save(update_fields=["status", "summary", "error", "processed_at", "attempts", "updated_at"])

@@ -10,6 +10,7 @@ from django.utils import timezone
 
 from plane.db.models.vcs import VcsDelivery
 from plane.integrations.vcs.service import process_delivery
+from plane.utils.exception_logger import log_exception
 
 
 class VcsDeliveryTask(Task):
@@ -22,8 +23,8 @@ class VcsDeliveryTask(Task):
                     error=str(exc),
                     processed_at=timezone.now(),
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                log_exception(e)
         super().on_failure(exc, task_id, args, kwargs, einfo)
 
 
@@ -37,20 +38,8 @@ class VcsDeliveryTask(Task):
     time_limit=90,
 )
 def process_vcs_delivery(self, delivery_id: str) -> None:
-    try:
-        delivery = VcsDelivery.objects.get(pk=delivery_id)
-        process_delivery(delivery)
-    except (OperationalError, InterfaceError) as exc:
-        if self.request.retries >= self.max_retries:
-            try:
-                VcsDelivery.objects.filter(pk=delivery_id).update(
-                    status=VcsDelivery.STATUS_FAILED,
-                    error=str(exc),
-                    processed_at=timezone.now(),
-                )
-            except Exception:
-                pass
-        raise
+    delivery = VcsDelivery.objects.get(pk=delivery_id)
+    process_delivery(delivery)
 
 
 @shared_task

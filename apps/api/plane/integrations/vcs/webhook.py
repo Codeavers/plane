@@ -55,6 +55,13 @@ class VcsWebhookEndpoint(APIView):
         if not vcs_provider.verify(request.headers, raw_body, connection.secret):
             return Response({}, status=status.HTTP_401_UNAUTHORIZED)
 
+        try:
+            payload = json.loads(raw_body.decode("utf-8"))
+        except ValueError:
+            payload = None
+        if not isinstance(payload, dict):
+            return Response({"error": "body must be application/json"}, status=status.HTTP_400_BAD_REQUEST)
+
         delivery_id = vcs_provider.delivery_id(request.headers)
         if not delivery_id:
             return Response({"error": "missing delivery id"}, status=status.HTTP_400_BAD_REQUEST)
@@ -62,14 +69,9 @@ class VcsWebhookEndpoint(APIView):
         if VcsDelivery.objects.filter(connection=connection, delivery_id=delivery_id).exists():
             return Response({"status": "duplicate"}, status=status.HTTP_200_OK)
 
-        try:
-            payload = json.loads(raw_body.decode("utf-8")) if raw_body else {}
-        except Exception:
-            payload = {}
-
         trimmed = vcs_provider.trim_payload(request.headers, payload)
         event = vcs_provider.event_name(request.headers)
-        action = payload.get("action", "") if isinstance(payload, dict) else ""
+        action = payload.get("action", "")
 
         with transaction.atomic():
             delivery, created = VcsDelivery.objects.get_or_create(

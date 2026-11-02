@@ -9,6 +9,7 @@ import json
 from typing import Any
 
 from django.core.serializers.json import DjangoJSONEncoder
+from django.db import transaction
 from django.utils import timezone
 
 from plane.api.serializers import IssueSerializer
@@ -83,16 +84,18 @@ class SetState(Action):
         issue.updated_by = actor
         issue.save(update_fields=["state", "updated_by", "updated_at"])
 
-        issue_activity.delay(
-            type="issue.activity.updated",
-            requested_data=json.dumps({"state_id": str(target.id)}),
-            actor_id=str(actor.id),
-            issue_id=str(issue.id),
-            project_id=str(issue.project_id),
-            current_instance=current_instance,
-            epoch=int(timezone.now().timestamp()),
-            notification=True,
-            origin=None,
+        transaction.on_commit(
+            lambda: issue_activity.delay(
+                type="issue.activity.updated",
+                requested_data=json.dumps({"state_id": str(target.id)}),
+                actor_id=str(actor.id),
+                issue_id=str(issue.id),
+                project_id=str(issue.project_id),
+                current_instance=current_instance,
+                epoch=int(timezone.now().timestamp()),
+                notification=True,
+                origin=None,
+            )
         )
 
         return ActionResult(
@@ -170,14 +173,16 @@ class Comment(Action):
             cls=DjangoJSONEncoder,
         )
 
-        issue_activity.delay(
-            type="comment.activity.created",
-            requested_data=requested_data,
-            actor_id=str(actor.id),
-            issue_id=str(issue.id),
-            project_id=str(issue.project_id),
-            current_instance=None,
-            epoch=int(timezone.now().timestamp()),
+        transaction.on_commit(
+            lambda: issue_activity.delay(
+                type="comment.activity.created",
+                requested_data=requested_data,
+                actor_id=str(actor.id),
+                issue_id=str(issue.id),
+                project_id=str(issue.project_id),
+                current_instance=None,
+                epoch=int(timezone.now().timestamp()),
+            )
         )
 
         return ActionResult(

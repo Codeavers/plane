@@ -32,6 +32,7 @@ def _parse_iso_datetime(value: str | None) -> datetime | None:
 
 class GitHubProvider(VcsProvider):
     key: str = "github"
+    name: str = "GitHub"
 
     def verify(self, headers: Mapping[str, str], raw_body: bytes, secret: str) -> bool:
         signature = _get_header(headers, "X-Hub-Signature-256")

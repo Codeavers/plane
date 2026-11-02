@@ -90,7 +90,14 @@ class VcsDeliverySerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
+class StrictBooleanField(serializers.BooleanField):
+    TRUE_VALUES = {True}
+    FALSE_VALUES = {False}
+
+
 class VcsProjectSettingsSerializer(serializers.ModelSerializer):
+    enabled = StrictBooleanField()
+
     class Meta:
         model = VcsProjectSettings
         fields = (
@@ -106,6 +113,8 @@ class VcsProjectSettingsSerializer(serializers.ModelSerializer):
         read_only_fields = ("id", "project", "workspace", "created_at", "updated_at")
 
     def validate_overrides(self, value):
+        if not isinstance(value, dict):
+            raise serializers.ValidationError("overrides must be an object")
         if not value:
             return {}
         try:

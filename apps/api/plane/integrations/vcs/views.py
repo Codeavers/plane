@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # See the LICENSE file for details.
 
+from django.db import transaction
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import status
@@ -17,7 +18,7 @@ from plane.app.permissions import (
     issue_hidden_from_guest,
 )
 from plane.app.views.base import BaseAPIView
-from plane.db.models import Workspace
+from plane.db.models import User, Workspace, WorkspaceMember
 from plane.db.models.api import generate_token
 from plane.db.models.vcs import (
     VcsConnection,
@@ -28,15 +29,13 @@ from plane.db.models.vcs import (
 from plane.integrations.vcs.bot import create_bot_user
 from plane.integrations.vcs.events import PullRequestEvent
 from plane.integrations.vcs.matchers import extract_ids, resolve_work_items
+from plane.integrations.vcs.providers.registry import registry
 from plane.integrations.vcs.serializers import (
     VcsConnectionSerializer,
     VcsDeliverySerializer,
+    VcsProjectSettingsSerializer,
 )
-from plane.integrations.vcs.settings import (
-    DEFAULT_SETTINGS,
-    SettingsError,
-    validate_settings as validate_vcs_settings,
-)
+from plane.integrations.vcs.settings import DEFAULT_SETTINGS
 from plane.integrations.vcs.tasks import process_vcs_delivery
 
 
@@ -46,20 +45,12 @@ class VcsProvidersEndpoint(BaseAPIView):
     def get(self, request, slug: str) -> Response:
         providers_data = [
             {
-                "key": "github",
-                "name": "GitHub",
+                "key": provider.key,
+                "name": provider.name or provider.key,
                 "default_settings": DEFAULT_SETTINGS,
-                "settings_schema": {
-                    "type": "object",
-                    "properties": {
-                        "version": {"type": "integer"},
-                        "matchers": {"type": "array"},
-                        "base_branches": {"type": "array"},
-                        "rules": {"type": "array"},
-                        "comment_templates": {"type": "object"},
-                    },
-                },
+                "settings_schema": provider.settings_schema(),
             }
+            for provider in registry.all()
         ]
         return Response(providers_data, status=status.HTTP_200_OK)
 
@@ -78,8 +69,9 @@ class VcsConnectionEndpoint(BaseAPIView):
         workspace = get_object_or_404(Workspace, slug=slug)
         serializer = VcsConnectionSerializer(data=request.data)
         if serializer.is_valid():
-            bot_user = create_bot_user(workspace)
-            conn = serializer.save(workspace=workspace, bot_user=bot_user)
+            with transaction.atomic():
+                bot_user = create_bot_user(workspace)
+                conn = serializer.save(workspace=workspace, bot_user=bot_user)
             data = dict(serializer.data)
             data["secret"] = conn.secret
             data["webhook_url"] = f"{request.build_absolute_uri('/')}api/integrations/vcs/{conn.provider}/{conn.id}/"
@@ -108,7 +100,12 @@ class VcsConnectionDetailEndpoint(BaseAPIView):
     @allow_permission(allowed_roles=[ROLE.ADMIN], level="WORKSPACE")
     def delete(self, request, slug: str, connection_id: str) -> Response:
         conn = get_object_or_404(VcsConnection, pk=connection_id, workspace__slug=slug)
-        conn.delete()
+        with transaction.atomic():
+            bot_user_id = conn.bot_user_id
+            conn.delete()
+            if bot_user_id:
+                WorkspaceMember.objects.filter(workspace__slug=slug, member_id=bot_user_id).update(is_active=False)
+                User.objects.filter(pk=bot_user_id, is_bot=True, bot_type="VCS").update(is_active=False)
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
@@ -148,6 +145,8 @@ class VcsRedeliverEndpoint(BaseAPIView):
             connection_id=connection_id,
             connection__workspace__slug=slug,
         )
+        if not delivery.connection.is_active:
+            return Response({"error": "connection is inactive"}, status=status.HTTP_400_BAD_REQUEST)
         delivery.status = VcsDelivery.STATUS_RECEIVED
         delivery.summary = {}
         delivery.error = ""
@@ -202,17 +201,21 @@ class VcsProjectSettingsEndpoint(BaseAPIView):
 
     def get(self, request, slug: str, project_id: str) -> Response:
         connection_id = request.query_params.get("connection")
+        connections = VcsConnection.objects.filter(workspace__slug=slug)
         if connection_id:
-            ps = VcsProjectSettings.objects.filter(
-                project_id=project_id,
-                connection_id=connection_id,
-                workspace__slug=slug,
-            ).first()
+            conn = get_object_or_404(connections, pk=connection_id)
         else:
-            ps = VcsProjectSettings.objects.filter(
-                project_id=project_id,
-                workspace__slug=slug,
-            ).first()
+            if connections.count() > 1:
+                return Response(
+                    {"error": "connection query parameter is required"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            conn = connections.first()
+        ps = (
+            VcsProjectSettings.objects.filter(project_id=project_id, connection=conn, workspace__slug=slug).first()
+            if conn
+            else None
+        )
 
         if not ps:
             return Response({"enabled": True, "overrides": {}}, status=status.HTTP_200_OK)
@@ -233,14 +236,18 @@ class VcsProjectSettingsEndpoint(BaseAPIView):
             return Response({"error": "connection is required"}, status=status.HTTP_400_BAD_REQUEST)
 
         conn = get_object_or_404(VcsConnection, pk=connection_id, workspace__slug=slug)
-        overrides = request.data.get("overrides", {})
-        if overrides:
-            try:
-                overrides = validate_vcs_settings(overrides, partial=True)
-            except SettingsError as e:
-                return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        serializer = VcsProjectSettingsSerializer(
+            data={
+                "connection": conn.pk,
+                "enabled": request.data.get("enabled", True),
+                "overrides": request.data.get("overrides", {}),
+            }
+        )
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        enabled = serializer.validated_data["enabled"]
+        overrides = serializer.validated_data["overrides"]
 
-        enabled = request.data.get("enabled", True)
         ps, _ = VcsProjectSettings.objects.update_or_create(
             connection=conn,
             project_id=project_id,
