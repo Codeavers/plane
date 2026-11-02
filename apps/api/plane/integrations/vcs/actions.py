@@ -53,11 +53,7 @@ class SetState(Action):
         connection: VcsConnection,
         templates: dict[str, str],
     ) -> ActionResult:
-        target = (
-            State.objects.filter(project_id=issue.project_id, name__iexact=self.state)
-            .order_by("sequence")
-            .first()
-        )
+        target = State.objects.filter(project_id=issue.project_id, name__iexact=self.state).order_by("sequence").first()
         if not target and self.fallback_group:
             target = (
                 State.objects.filter(project_id=issue.project_id, group=self.fallback_group)
@@ -69,7 +65,10 @@ class SetState(Action):
             return ActionResult(
                 type="set_state",
                 status="skipped",
-                detail=f"No state matching '{self.state}' or fallback group '{self.fallback_group}' in project {issue.project_id}",
+                detail=(
+                    f"No state matching '{self.state}' or fallback group "
+                    f"'{self.fallback_group}' in project {issue.project_id}"
+                ),
             )
 
         if issue.state_id == target.id:

@@ -20,21 +20,15 @@ class Migration(migrations.Migration):
             fields=[
                 (
                     "created_at",
-                    models.DateTimeField(
-                        auto_now_add=True, verbose_name="Created At"
-                    ),
+                    models.DateTimeField(auto_now_add=True, verbose_name="Created At"),
                 ),
                 (
                     "updated_at",
-                    models.DateTimeField(
-                        auto_now=True, verbose_name="Last Modified At"
-                    ),
+                    models.DateTimeField(auto_now=True, verbose_name="Last Modified At"),
                 ),
                 (
                     "deleted_at",
-                    models.DateTimeField(
-                        blank=True, null=True, verbose_name="Deleted At"
-                    ),
+                    models.DateTimeField(blank=True, null=True, verbose_name="Deleted At"),
                 ),
                 (
                     "id",
@@ -137,21 +131,15 @@ class Migration(migrations.Migration):
             fields=[
                 (
                     "created_at",
-                    models.DateTimeField(
-                        auto_now_add=True, verbose_name="Created At"
-                    ),
+                    models.DateTimeField(auto_now_add=True, verbose_name="Created At"),
                 ),
                 (
                     "updated_at",
-                    models.DateTimeField(
-                        auto_now=True, verbose_name="Last Modified At"
-                    ),
+                    models.DateTimeField(auto_now=True, verbose_name="Last Modified At"),
                 ),
                 (
                     "deleted_at",
-                    models.DateTimeField(
-                        blank=True, null=True, verbose_name="Deleted At"
-                    ),
+                    models.DateTimeField(blank=True, null=True, verbose_name="Deleted At"),
                 ),
                 (
                     "id",
@@ -229,21 +217,15 @@ class Migration(migrations.Migration):
             fields=[
                 (
                     "created_at",
-                    models.DateTimeField(
-                        auto_now_add=True, verbose_name="Created At"
-                    ),
+                    models.DateTimeField(auto_now_add=True, verbose_name="Created At"),
                 ),
                 (
                     "updated_at",
-                    models.DateTimeField(
-                        auto_now=True, verbose_name="Last Modified At"
-                    ),
+                    models.DateTimeField(auto_now=True, verbose_name="Last Modified At"),
                 ),
                 (
                     "deleted_at",
-                    models.DateTimeField(
-                        blank=True, null=True, verbose_name="Deleted At"
-                    ),
+                    models.DateTimeField(blank=True, null=True, verbose_name="Deleted At"),
                 ),
                 (
                     "id",
@@ -349,21 +331,15 @@ class Migration(migrations.Migration):
             fields=[
                 (
                     "created_at",
-                    models.DateTimeField(
-                        auto_now_add=True, verbose_name="Created At"
-                    ),
+                    models.DateTimeField(auto_now_add=True, verbose_name="Created At"),
                 ),
                 (
                     "updated_at",
-                    models.DateTimeField(
-                        auto_now=True, verbose_name="Last Modified At"
-                    ),
+                    models.DateTimeField(auto_now=True, verbose_name="Last Modified At"),
                 ),
                 (
                     "deleted_at",
-                    models.DateTimeField(
-                        blank=True, null=True, verbose_name="Deleted At"
-                    ),
+                    models.DateTimeField(blank=True, null=True, verbose_name="Deleted At"),
                 ),
                 (
                     "id",
@@ -452,21 +428,15 @@ class Migration(migrations.Migration):
             fields=[
                 (
                     "created_at",
-                    models.DateTimeField(
-                        auto_now_add=True, verbose_name="Created At"
-                    ),
+                    models.DateTimeField(auto_now_add=True, verbose_name="Created At"),
                 ),
                 (
                     "updated_at",
-                    models.DateTimeField(
-                        auto_now=True, verbose_name="Last Modified At"
-                    ),
+                    models.DateTimeField(auto_now=True, verbose_name="Last Modified At"),
                 ),
                 (
                     "deleted_at",
-                    models.DateTimeField(
-                        blank=True, null=True, verbose_name="Deleted At"
-                    ),
+                    models.DateTimeField(blank=True, null=True, verbose_name="Deleted At"),
                 ),
                 (
                     "id",

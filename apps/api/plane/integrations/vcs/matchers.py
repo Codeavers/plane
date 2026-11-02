@@ -76,9 +76,7 @@ def resolve_work_items(workspace_id: uuid.UUID | str, ids: list[MatchedId]) -> l
         .select_related("project", "state")
     )
 
-    lookup: dict[tuple[str, int], Issue] = {
-        (issue.project.identifier, issue.sequence_id): issue for issue in issues
-    }
+    lookup: dict[tuple[str, int], Issue] = {(issue.project.identifier, issue.sequence_id): issue for issue in issues}
 
     resolved: list[tuple[Issue, MatchedId]] = []
     for m in ids:
