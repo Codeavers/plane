@@ -98,6 +98,10 @@ app.conf.beat_schedule = {
         "task": "plane.bgtasks.exporter_expired_task.delete_old_s3_link",
         "schedule": crontab(hour=3, minute=45),  # UTC 03:45
     },
+    "purge-vcs-deliveries": {
+        "task": "plane.integrations.vcs.tasks.purge_vcs_deliveries",
+        "schedule": crontab(hour=3, minute=15),
+    },
 }
 
 
