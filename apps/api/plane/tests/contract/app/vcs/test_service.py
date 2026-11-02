@@ -5,12 +5,15 @@
 import copy
 from datetime import datetime, timedelta, timezone as dt_timezone
 import json
+import logging
 from pathlib import Path
 from unittest.mock import patch
 from uuid import uuid4
 
+from celery.exceptions import SoftTimeLimitExceeded
 from celery.schedules import crontab
 from django.db import InterfaceError, OperationalError
+from django.db.models import QuerySet
 from django.utils import timezone
 import pytest
 
@@ -23,7 +26,7 @@ from plane.db.models.vcs import (
     VcsPullRequest,
     VcsPullRequestLink,
 )
-from plane.integrations.vcs.actions import Comment
+from plane.integrations.vcs.actions import Comment, SetState
 from plane.integrations.vcs.providers.registry import registry
 from plane.integrations.vcs.service import process_delivery
 from plane.integrations.vcs.settings import DEFAULT_SETTINGS
@@ -129,7 +132,7 @@ def connection(workspace, create_bot_user):
 
 
 @pytest.mark.contract
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 def test_opened_moves_to_in_review_and_comments(
     project, project_states, connection, create_user, create_bot_user, mock_issue_activity
 ):
@@ -299,7 +302,7 @@ def test_merge_into_feature_branch_does_not_finish(project, project_states, conn
 
 
 @pytest.mark.contract
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 def test_cancelled_work_item_untouched_on_reopen(project, project_states, connection, create_user, mock_issue_activity):
     _seed_sequence_before_40(project)
     issue_40 = _make_issue(project, project_states["Cancelled"], create_user)
@@ -665,3 +668,209 @@ def test_celery_task_retries_transient_error_and_marks_failed(connection):
     delivery.refresh_from_db()
     assert delivery.status == VcsDelivery.STATUS_FAILED
     assert "database connection lost" in delivery.error
+
+
+@pytest.mark.contract
+@pytest.mark.django_db
+def test_operational_error_in_set_state_retries_and_marks_failed(project, project_states, connection, create_user):
+    _seed_sequence_before_40(project)
+    _make_issue(project, project_states["Todo"], create_user)
+
+    delivery = _make_delivery(connection, "opened.json")
+    with patch.object(SetState, "execute", side_effect=OperationalError("deadlock on work item")) as mock_exec:
+        try:
+            process_vcs_delivery.apply(args=[str(delivery.id)])
+        except OperationalError:
+            pass
+
+    assert mock_exec.call_count == 4
+    delivery.refresh_from_db()
+    assert delivery.status == VcsDelivery.STATUS_FAILED
+    assert "deadlock on work item" in delivery.error
+
+    with patch.object(SetState, "execute", side_effect=InterfaceError("cursor closed")):
+        with pytest.raises(InterfaceError):
+            process_delivery(_make_delivery(connection, "opened.json"))
+
+    with patch.object(SetState, "execute", side_effect=SoftTimeLimitExceeded()):
+        with pytest.raises(SoftTimeLimitExceeded):
+            process_delivery(_make_delivery(connection, "opened.json"))
+
+
+@pytest.mark.contract
+@pytest.mark.django_db(transaction=True)
+def test_work_item_value_error_logged_and_recorded(
+    project, project_states, connection, create_user, mock_issue_activity
+):
+    _seed_sequence_before_40(project)
+    issue_40 = _make_issue(project, project_states["Todo"], create_user)
+
+    delivery = _make_delivery(connection, "opened.json")
+    exc_logger = logging.getLogger("plane.exception")
+    with (
+        patch.object(Comment, "execute", side_effect=ValueError("invalid template context")),
+        patch.object(exc_logger, "exception") as mock_log_exc,
+    ):
+        process_delivery(delivery)
+
+    issue_40.refresh_from_db()
+    assert issue_40.state_id == project_states["Todo"].id
+    mock_issue_activity.delay.assert_not_called()
+
+    mock_log_exc.assert_called_once()
+    assert isinstance(mock_log_exc.call_args.args[0], ValueError)
+
+    delivery.refresh_from_db()
+    assert delivery.status == VcsDelivery.STATUS_PROCESSED
+    assert delivery.error == "1 work item(s) failed"
+
+    results = delivery.summary["work_items"][str(issue_40.id)]["results"]
+    error_results = [r for r in results if r.get("type") == "error"]
+    assert len(error_results) == 1
+    assert error_results[0]["status"] == "failed"
+    assert error_results[0]["detail"].startswith("ValueError:")
+    assert "invalid template context" in error_results[0]["detail"]
+
+
+@pytest.mark.contract
+@pytest.mark.django_db
+def test_malformed_payload_marks_delivery_failed(connection):
+    delivery = _make_delivery(
+        connection,
+        "opened.json",
+        mutate=lambda p: p["pull_request"].pop("updated_at", None),
+    )
+    process_delivery(delivery)
+
+    delivery.refresh_from_db()
+    assert delivery.status == VcsDelivery.STATUS_FAILED
+    assert delivery.error.startswith("malformed payload")
+    assert "missing updated_at" in delivery.error
+    assert delivery.processed_at is not None
+
+    provider = registry.get("github")
+    for exc in (KeyError("pull_request"), TypeError("expected mapping")):
+        bad_delivery = _make_delivery(connection, "opened.json")
+        with patch.object(provider, "parse", side_effect=exc):
+            process_delivery(bad_delivery)
+        bad_delivery.refresh_from_db()
+        assert bad_delivery.status == VcsDelivery.STATUS_FAILED
+        assert bad_delivery.error.startswith("malformed payload:")
+
+
+@pytest.mark.contract
+@pytest.mark.django_db
+def test_repo_filter_matches_case_insensitively(project, project_states, connection, create_user):
+    _seed_sequence_before_40(project)
+    issue_40 = _make_issue(project, project_states["Todo"], create_user)
+
+    connection.repo_filter = ["Codeavers/*"]
+    connection.save()
+
+    delivery = _make_delivery(
+        connection,
+        "opened.json",
+        mutate=lambda p: p["repository"].update({"full_name": "codeavers/plane"}),
+    )
+    process_delivery(delivery)
+
+    delivery.refresh_from_db()
+    assert delivery.status == VcsDelivery.STATUS_PROCESSED
+
+    issue_40.refresh_from_db()
+    assert issue_40.state_id == project_states["In Review"].id
+    assert VcsPullRequest.objects.filter(connection=connection, repo_full_name="codeavers/plane", number=42).exists()
+
+
+@pytest.mark.contract
+@pytest.mark.django_db
+def test_inactive_connection_marks_delivery_ignored(project, project_states, connection, create_user):
+    _seed_sequence_before_40(project)
+    issue_40 = _make_issue(project, project_states["Todo"], create_user)
+
+    connection.is_active = False
+    connection.save()
+
+    pr_delivery = _make_delivery(connection, "opened.json")
+    process_delivery(pr_delivery)
+
+    pr_delivery.refresh_from_db()
+    assert pr_delivery.status == VcsDelivery.STATUS_IGNORED
+    assert pr_delivery.summary == {"reason": "connection inactive"}
+    assert pr_delivery.processed_at is not None
+
+    issue_40.refresh_from_db()
+    assert issue_40.state_id == project_states["Todo"].id
+    assert VcsPullRequest.objects.filter(connection=connection).count() == 0
+    assert VcsPullRequestLink.objects.filter(issue=issue_40).count() == 0
+    assert IssueComment.objects.filter(issue=issue_40).count() == 0
+
+    ping_delivery = _make_delivery(connection, "ping.json", event="ping")
+    process_delivery(ping_delivery)
+
+    ping_delivery.refresh_from_db()
+    assert ping_delivery.status == VcsDelivery.STATUS_IGNORED
+    assert ping_delivery.summary == {"reason": "connection inactive"}
+    connection.refresh_from_db()
+    assert connection.verified_at is None
+
+
+@pytest.mark.contract
+@pytest.mark.django_db
+def test_celery_task_marks_failed_once_and_logs_exception_on_update_error(connection):
+    delivery = _make_delivery(connection, "opened.json")
+    failed_writes = 0
+    orig_qs_update = QuerySet.update
+    orig_delivery_save = VcsDelivery.save
+
+    def _counting_update(self, **kwargs):
+        nonlocal failed_writes
+        if self.model is VcsDelivery and kwargs.get("status") == VcsDelivery.STATUS_FAILED:
+            failed_writes += 1
+        return orig_qs_update(self, **kwargs)
+
+    def _counting_save(self, *args, **kwargs):
+        nonlocal failed_writes
+        if self.status == VcsDelivery.STATUS_FAILED:
+            failed_writes += 1
+        return orig_delivery_save(self, *args, **kwargs)
+
+    with (
+        patch("plane.integrations.vcs.tasks.process_delivery", side_effect=OperationalError("db down")),
+        patch.object(QuerySet, "update", _counting_update),
+        patch.object(VcsDelivery, "save", _counting_save),
+    ):
+        try:
+            process_vcs_delivery.apply(args=[str(delivery.id)])
+        except OperationalError:
+            pass
+
+    assert failed_writes == 1
+    delivery.refresh_from_db()
+    assert delivery.status == VcsDelivery.STATUS_FAILED
+
+    delivery2 = _make_delivery(connection, "opened.json")
+
+    def _failing_update(self, **kwargs):
+        if self.model is VcsDelivery and kwargs.get("status") == VcsDelivery.STATUS_FAILED:
+            raise OperationalError("cannot persist failed status")
+        return orig_qs_update(self, **kwargs)
+
+    def _failing_save(self, *args, **kwargs):
+        if self.status == VcsDelivery.STATUS_FAILED:
+            raise OperationalError("cannot persist failed status")
+        return orig_delivery_save(self, *args, **kwargs)
+
+    exc_logger = logging.getLogger("plane.exception")
+    with (
+        patch("plane.integrations.vcs.tasks.process_delivery", side_effect=OperationalError("db down")),
+        patch.object(QuerySet, "update", _failing_update),
+        patch.object(VcsDelivery, "save", _failing_save),
+        patch.object(exc_logger, "exception") as mock_log_exc,
+    ):
+        try:
+            process_vcs_delivery.apply(args=[str(delivery2.id)])
+        except OperationalError:
+            pass
+
+    assert mock_log_exc.call_count == 1

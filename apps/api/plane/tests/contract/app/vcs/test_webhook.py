@@ -364,3 +364,34 @@ def test_end_to_end_eager_opened_moves_work_item(api_client, workspace, connecti
 
     delivery = VcsDelivery.objects.get(connection=connection, delivery_id="gh-deliv-e2e-001")
     assert delivery.status == VcsDelivery.STATUS_PROCESSED
+
+
+@pytest.mark.contract
+@pytest.mark.django_db(transaction=True)
+def test_invalid_json_or_non_object_body_returns_400(api_client, connection):
+    bad_bodies = [
+        b"{not valid json",
+        b"",
+        b"[1, 2, 3]",
+        b'"plain string"',
+        b"null",
+        b"\xff\xfe",
+    ]
+
+    with patch("plane.integrations.vcs.webhook.process_vcs_delivery.delay") as mock_delay:
+        for idx, raw_body in enumerate(bad_bodies):
+            sig = _sign_body(raw_body, connection.secret)
+            response = _post_webhook(
+                api_client,
+                _webhook_url("github", connection.id),
+                raw_body,
+                signature=sig,
+                delivery_id=f"gh-deliv-bad-json-{idx}",
+            )
+            assert response.status_code == status.HTTP_400_BAD_REQUEST
+            assert response.json() == {"error": "body must be application/json"}
+
+    assert VcsDelivery.objects.filter(connection=connection).count() == 0
+    connection.refresh_from_db()
+    assert connection.last_delivery_at is None
+    mock_delay.assert_not_called()

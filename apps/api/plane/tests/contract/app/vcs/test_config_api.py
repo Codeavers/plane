@@ -11,7 +11,7 @@ import pytest
 from rest_framework import status
 from rest_framework.test import APIClient
 
-from plane.db.models import Issue, IssueSequence, ProjectMember, WorkspaceMember
+from plane.db.models import Issue, IssueSequence, ProjectMember, User, WorkspaceMember
 from plane.db.models.vcs import (
     VcsConnection,
     VcsDelivery,
@@ -20,7 +20,12 @@ from plane.db.models.vcs import (
     VcsPullRequestLink,
 )
 from plane.integrations.vcs.bot import create_bot_user
-from plane.integrations.vcs.serializers import VcsConnectionSerializer
+from plane.integrations.vcs.providers.base import VcsProvider
+from plane.integrations.vcs.providers.registry import registry
+from plane.integrations.vcs.serializers import (
+    VcsConnectionSerializer,
+    VcsProjectSettingsSerializer,
+)
 from plane.integrations.vcs.settings import DEFAULT_SETTINGS
 from plane.tests.factories import ProjectFactory, UserFactory, WorkspaceFactory
 
@@ -280,7 +285,7 @@ def test_redeliver_requeues(session_client, workspace, create_user, create_bot_u
         resp = session_client.post(url)
         cross_resp = session_client.post(cross_url)
 
-    assert resp.status_code in (status.HTTP_200_OK, status.HTTP_202_ACCEPTED)
+    assert resp.status_code == status.HTTP_202_ACCEPTED
     assert cross_resp.status_code == status.HTTP_404_NOT_FOUND
 
     delivery.refresh_from_db()
@@ -672,3 +677,292 @@ def test_bot_user_created_with_connection(session_client, workspace):
         role=15,
         is_active=True,
     ).exists()
+
+
+@pytest.mark.contract
+@pytest.mark.django_db(transaction=True)
+def test_redeliver_inactive_connection_returns_400(session_client, workspace, create_bot_user):
+    conn = VcsConnection.objects.create(
+        workspace=workspace,
+        provider="github",
+        name="Inactive Redeliver Connection",
+        is_active=False,
+        bot_user=create_bot_user,
+        settings=copy.deepcopy(DEFAULT_SETTINGS),
+    )
+    delivery = VcsDelivery.objects.create(
+        connection=conn,
+        delivery_id="deliv-inactive-redeliver-001",
+        event="pull_request",
+        action="opened",
+        status=VcsDelivery.STATUS_FAILED,
+        error="previous error",
+    )
+
+    url = f"/api/workspaces/{workspace.slug}/vcs-connections/{conn.id}/deliveries/{delivery.id}/redeliver/"
+    with patch("plane.integrations.vcs.tasks.process_vcs_delivery.delay") as mock_delay:
+        resp = session_client.post(url)
+
+    assert resp.status_code == status.HTTP_400_BAD_REQUEST
+    assert resp.json() == {"error": "connection is inactive"}
+
+    delivery.refresh_from_db()
+    assert delivery.status == VcsDelivery.STATUS_FAILED
+    mock_delay.assert_not_called()
+
+
+@pytest.mark.contract
+@pytest.mark.django_db
+def test_delete_connection_deactivates_bot_and_membership(session_client, workspace):
+    base_url = f"/api/workspaces/{workspace.slug}/vcs-connections/"
+    create_resp = session_client.post(
+        base_url,
+        {"provider": "github", "name": "Deletable Connection"},
+        format="json",
+    )
+    assert create_resp.status_code == status.HTTP_201_CREATED
+    conn_id = create_resp.json()["id"]
+
+    conn = VcsConnection.objects.select_related("bot_user").get(id=conn_id)
+    bot_user = conn.bot_user
+    assert bot_user is not None
+    assert bot_user.is_active is True
+    assert WorkspaceMember.objects.get(workspace=workspace, member=bot_user).is_active is True
+
+    del_resp = session_client.delete(f"{base_url}{conn_id}/")
+    assert del_resp.status_code == status.HTTP_204_NO_CONTENT
+    assert not VcsConnection.objects.filter(id=conn_id).exists()
+
+    bot_user.refresh_from_db()
+    assert bot_user.is_active is False
+
+    membership = WorkspaceMember.objects.get(workspace=workspace, member=bot_user)
+    assert membership.is_active is False
+
+
+@pytest.mark.contract
+@pytest.mark.django_db(transaction=True)
+def test_create_connection_atomic_rolls_back_bot_user(session_client, workspace):
+    base_url = f"/api/workspaces/{workspace.slug}/vcs-connections/"
+    with patch.object(VcsConnectionSerializer, "save", side_effect=RuntimeError("db failure")):
+        resp = session_client.post(
+            base_url,
+            {"provider": "github", "name": "Rollback Connection"},
+            format="json",
+        )
+
+    assert resp.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
+    assert VcsConnection.objects.filter(workspace=workspace).count() == 0
+    assert User.objects.filter(is_bot=True, bot_type="VCS").count() == 0
+    assert WorkspaceMember.objects.filter(workspace=workspace, member__is_bot=True).count() == 0
+
+
+@pytest.mark.contract
+@pytest.mark.django_db
+def test_providers_endpoint_lists_all_registered_providers(workspace):
+    class _DummyProvider(VcsProvider):
+        key = "gitlab_dummy"
+
+        def verify(self, headers, raw_body, secret):
+            return False
+
+        def delivery_id(self, headers):
+            return None
+
+        def event_name(self, headers):
+            return ""
+
+        def parse(self, headers, payload):
+            return None
+
+        def trim_payload(self, headers, payload):
+            return {}
+
+        def settings_schema(self):
+            return {"type": "object", "title": "GitLab Dummy Schema"}
+
+    member = UserFactory()
+    WorkspaceMember.objects.create(workspace=workspace, member=member, role=MEMBER)
+    member_client = _auth_client(member)
+
+    with patch.dict(registry._providers, {"gitlab_dummy": _DummyProvider()}):
+        resp = member_client.get(f"/api/workspaces/{workspace.slug}/vcs-providers/")
+
+    assert resp.status_code == status.HTTP_200_OK
+    by_key = {item["key"]: item for item in resp.json()}
+    assert "github" in by_key
+    assert "gitlab_dummy" in by_key
+
+    github_provider = registry.get("github")
+    github_schema = by_key["github"].get("settings_schema") or by_key["github"].get("schema")
+    github_defaults = by_key["github"].get("default_settings") or by_key["github"].get("defaults")
+    assert github_schema == github_provider.settings_schema()
+    assert github_defaults == DEFAULT_SETTINGS
+
+    dummy_schema = by_key["gitlab_dummy"].get("settings_schema") or by_key["gitlab_dummy"].get("schema")
+    dummy_defaults = by_key["gitlab_dummy"].get("default_settings") or by_key["gitlab_dummy"].get("defaults")
+    assert dummy_schema == {"type": "object", "title": "GitLab Dummy Schema"}
+    assert dummy_defaults == DEFAULT_SETTINGS
+
+
+@pytest.mark.contract
+@pytest.mark.django_db
+def test_project_settings_rejects_bad_types(workspace, create_user, create_bot_user):
+    conn = VcsConnection.objects.create(
+        workspace=workspace,
+        provider="github",
+        name="Typed Connection",
+        bot_user=create_bot_user,
+        settings=copy.deepcopy(DEFAULT_SETTINGS),
+    )
+    project = ProjectFactory(
+        workspace=workspace,
+        name="Codeaver",
+        identifier="CODEA",
+        created_by=create_user,
+        updated_by=create_user,
+    )
+    project_admin = UserFactory()
+    WorkspaceMember.objects.create(workspace=workspace, member=project_admin, role=MEMBER)
+    ProjectMember.objects.create(project=project, workspace=workspace, member=project_admin, role=ADMIN)
+    proj_admin_client = _auth_client(project_admin)
+
+    assert not VcsProjectSettingsSerializer(
+        data={"connection": str(conn.id), "enabled": True, "overrides": []}
+    ).is_valid()
+    assert not VcsProjectSettingsSerializer(
+        data={"connection": str(conn.id), "enabled": "true", "overrides": {}}
+    ).is_valid()
+
+    url = f"/api/workspaces/{workspace.slug}/projects/{project.id}/vcs-settings/"
+    invalid_payloads = [
+        {"connection": str(conn.id), "enabled": "not-a-bool", "overrides": {}},
+        {"connection": str(conn.id), "enabled": "true", "overrides": {}},
+        {"connection": str(conn.id), "enabled": 123, "overrides": {}},
+        {"connection": str(conn.id), "enabled": ["bad"], "overrides": {}},
+        {"connection": str(conn.id), "enabled": True, "overrides": []},
+        {"connection": str(conn.id), "enabled": True, "overrides": "not-an-object"},
+        {"connection": str(conn.id), "enabled": True, "overrides": 123},
+    ]
+
+    for bad_payload in invalid_payloads:
+        resp = proj_admin_client.put(url, bad_payload, format="json")
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST
+
+    assert VcsProjectSettings.objects.filter(project=project).count() == 0
+
+
+@pytest.mark.contract
+@pytest.mark.django_db
+def test_project_settings_get_connection_query_rule(workspace, create_user, create_bot_user):
+    conn_1 = VcsConnection.objects.create(
+        workspace=workspace,
+        provider="github",
+        name="Primary Connection",
+        bot_user=create_bot_user,
+        settings=copy.deepcopy(DEFAULT_SETTINGS),
+    )
+    other_ws = WorkspaceFactory()
+    VcsConnection.objects.create(
+        workspace=other_ws,
+        provider="github",
+        name="Other Workspace Connection",
+        settings=copy.deepcopy(DEFAULT_SETTINGS),
+    )
+    project = ProjectFactory(
+        workspace=workspace,
+        name="Codeaver",
+        identifier="CODEA",
+        created_by=create_user,
+        updated_by=create_user,
+    )
+    project_admin = UserFactory()
+    WorkspaceMember.objects.create(workspace=workspace, member=project_admin, role=MEMBER)
+    ProjectMember.objects.create(project=project, workspace=workspace, member=project_admin, role=ADMIN)
+    proj_admin_client = _auth_client(project_admin)
+
+    url = f"/api/workspaces/{workspace.slug}/projects/{project.id}/vcs-settings/"
+    put_resp = proj_admin_client.put(
+        url,
+        {"connection": str(conn_1.id), "enabled": False, "overrides": {"base_branches": ["main"]}},
+        format="json",
+    )
+    assert put_resp.status_code == status.HTTP_200_OK
+
+    single_get = proj_admin_client.get(url)
+    assert single_get.status_code == status.HTTP_200_OK
+    assert single_get.json()["enabled"] is False
+    assert single_get.json()["overrides"] == {"base_branches": ["main"]}
+
+    conn_2 = VcsConnection.objects.create(
+        workspace=workspace,
+        provider="github",
+        name="Secondary Connection",
+        bot_user=create_bot_user,
+        settings=copy.deepcopy(DEFAULT_SETTINGS),
+    )
+
+    ambiguous_get = proj_admin_client.get(url)
+    assert ambiguous_get.status_code == status.HTTP_400_BAD_REQUEST
+    assert ambiguous_get.json() == {"error": "connection query parameter is required"}
+
+    explicit_get_1 = proj_admin_client.get(f"{url}?connection={conn_1.id}")
+    assert explicit_get_1.status_code == status.HTTP_200_OK
+    assert explicit_get_1.json()["enabled"] is False
+    assert explicit_get_1.json()["overrides"] == {"base_branches": ["main"]}
+
+    explicit_get_2 = proj_admin_client.get(f"{url}?connection={conn_2.id}")
+    assert explicit_get_2.status_code == status.HTTP_200_OK
+    assert explicit_get_2.json()["enabled"] is True
+    assert explicit_get_2.json()["overrides"] == {}
+
+
+@pytest.mark.contract
+@pytest.mark.django_db
+def test_cross_workspace_connection_returns_404(session_client, workspace, create_user, create_bot_user):
+    project = ProjectFactory(
+        workspace=workspace,
+        name="Codeaver",
+        identifier="CODEA",
+        created_by=create_user,
+        updated_by=create_user,
+    )
+    ProjectMember.objects.get_or_create(
+        project=project,
+        workspace=workspace,
+        member=create_user,
+        defaults={"role": ADMIN},
+    )
+
+    other_workspace = WorkspaceFactory(owner=create_user)
+    WorkspaceMember.objects.create(workspace=other_workspace, member=create_user, role=ADMIN)
+    other_conn = VcsConnection.objects.create(
+        workspace=other_workspace,
+        provider="github",
+        name="Foreign Connection",
+        bot_user=create_bot_user,
+        settings=copy.deepcopy(DEFAULT_SETTINGS),
+    )
+    original_secret = other_conn.secret
+
+    rotate_resp = session_client.post(
+        f"/api/workspaces/{workspace.slug}/vcs-connections/{other_conn.id}/rotate-secret/"
+    )
+    assert rotate_resp.status_code == status.HTTP_404_NOT_FOUND
+    other_conn.refresh_from_db()
+    assert other_conn.secret == original_secret
+
+    match_resp = session_client.post(
+        f"/api/workspaces/{workspace.slug}/vcs-connections/{other_conn.id}/test-match/",
+        {"branch": "feat/CODEA-1", "title": "", "body": ""},
+        format="json",
+    )
+    assert match_resp.status_code == status.HTTP_404_NOT_FOUND
+
+    put_resp = session_client.put(
+        f"/api/workspaces/{workspace.slug}/projects/{project.id}/vcs-settings/",
+        {"connection": str(other_conn.id), "enabled": True, "overrides": {}},
+        format="json",
+    )
+    assert put_resp.status_code == status.HTTP_404_NOT_FOUND
+    assert VcsProjectSettings.objects.filter(project=project).count() == 0

@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 import json
 from unittest.mock import patch
 
+from django.db import transaction
 import pytest
 
 from plane.db.models import Issue, IssueComment, State
@@ -103,7 +104,7 @@ def connection(workspace, create_bot_user):
 
 
 @pytest.mark.contract
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 def test_set_state_by_name(project, project_states, connection, create_user, create_bot_user, mock_issue_activity):
     issue = Issue.objects.create(
         name="Implement VCS actions",
@@ -146,7 +147,7 @@ def test_set_state_by_name(project, project_states, connection, create_user, cre
 
 
 @pytest.mark.contract
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 def test_set_state_falls_back_to_group(
     project, project_states, connection, create_user, create_bot_user, mock_issue_activity
 ):
@@ -177,7 +178,7 @@ def test_set_state_falls_back_to_group(
 
 
 @pytest.mark.contract
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 def test_set_state_skipped_when_no_state(workspace, connection, create_user, create_bot_user, mock_issue_activity):
     minimal_project = ProjectFactory(
         workspace=workspace,
@@ -220,7 +221,7 @@ def test_set_state_skipped_when_no_state(workspace, connection, create_user, cre
 
 
 @pytest.mark.contract
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 def test_set_state_noop_when_already_there(
     project, project_states, connection, create_user, create_bot_user, mock_issue_activity
 ):
@@ -250,7 +251,7 @@ def test_set_state_noop_when_already_there(
 
 
 @pytest.mark.contract
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 def test_comment_escapes_title(project, project_states, connection, create_user, create_bot_user, mock_issue_activity):
     issue = Issue.objects.create(
         name="Escape HTML in PR title",
@@ -295,7 +296,7 @@ def test_comment_escapes_title(project, project_states, connection, create_user,
 
 
 @pytest.mark.contract
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 def test_comment_not_duplicated_for_same_event(
     project, project_states, connection, create_user, create_bot_user, mock_issue_activity
 ):
@@ -375,3 +376,57 @@ def test_set_state_preserves_concurrent_name_change(
     assert issue.name == "Concurrent work item name"
     assert issue.state_id == project_states["Done"].id
     assert issue.completed_at is not None
+
+
+@pytest.mark.contract
+@pytest.mark.django_db(transaction=True)
+def test_comment_failure_rolls_back_state_and_skips_issue_activity(
+    project, project_states, connection, create_user, create_bot_user, mock_issue_activity
+):
+    issue = Issue.objects.create(
+        name="Rollback suppresses on_commit activity",
+        workspace=project.workspace,
+        project=project,
+        state=project_states["Todo"],
+        created_by=create_user,
+    )
+    event = _make_event(action="opened")
+
+    with (
+        patch.object(IssueComment.objects, "create", side_effect=RuntimeError("comment write failed")),
+        pytest.raises(RuntimeError, match="comment write failed"),
+        transaction.atomic(),
+    ):
+        state_res = SetState(state="In Review", fallback_group="started").execute(
+            issue,
+            event,
+            actor=create_bot_user,
+            connection=connection,
+            templates=DEFAULT_SETTINGS["comment_templates"],
+        )
+        assert state_res.status == "applied"
+        Comment(template="pr_opened").execute(
+            issue,
+            event,
+            actor=create_bot_user,
+            connection=connection,
+            templates=DEFAULT_SETTINGS["comment_templates"],
+        )
+
+    issue.refresh_from_db()
+    assert issue.state_id == project_states["Todo"].id
+    mock_issue_activity.delay.assert_not_called()
+
+    with pytest.raises(RuntimeError, match="abort after comment"), transaction.atomic():
+        comment_res = Comment(template="pr_opened").execute(
+            issue,
+            event,
+            actor=create_bot_user,
+            connection=connection,
+            templates=DEFAULT_SETTINGS["comment_templates"],
+        )
+        assert comment_res.status == "applied"
+        raise RuntimeError("abort after comment")
+
+    assert IssueComment.objects.filter(issue=issue).count() == 0
+    mock_issue_activity.delay.assert_not_called()
