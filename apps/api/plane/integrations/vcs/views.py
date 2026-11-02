@@ -102,6 +102,9 @@ class VcsConnectionDetailEndpoint(BaseAPIView):
         conn = get_object_or_404(VcsConnection, pk=connection_id, workspace__slug=slug)
         with transaction.atomic():
             bot_user_id = conn.bot_user_id
+            # Deliveries already queued load the connection without the soft-delete filter;
+            # an inactive connection makes them a no-op.
+            conn.is_active = False
             conn.delete()
             if bot_user_id:
                 WorkspaceMember.objects.filter(workspace__slug=slug, member_id=bot_user_id).update(is_active=False)

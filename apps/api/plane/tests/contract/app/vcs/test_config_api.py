@@ -732,6 +732,7 @@ def test_delete_connection_deactivates_bot_and_membership(session_client, worksp
     del_resp = session_client.delete(f"{base_url}{conn_id}/")
     assert del_resp.status_code == status.HTTP_204_NO_CONTENT
     assert not VcsConnection.objects.filter(id=conn_id).exists()
+    assert VcsConnection.all_objects.get(id=conn_id).is_active is False
 
     bot_user.refresh_from_db()
     assert bot_user.is_active is False
