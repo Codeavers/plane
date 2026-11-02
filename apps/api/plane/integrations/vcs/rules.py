@@ -45,7 +45,7 @@ def _match_rule(rule: dict[str, Any], ctx: RuleContext, effective_action: str) -
         else:
             patterns = [expected]
 
-        if not any(fnmatch.fnmatch(ctx.event.base_branch, pat) for pat in patterns):
+        if not any(fnmatch.fnmatchcase(ctx.event.base_branch, pat) for pat in patterns):
             return False
 
     return True

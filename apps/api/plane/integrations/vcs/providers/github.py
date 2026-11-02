@@ -39,7 +39,7 @@ class GitHubProvider(VcsProvider):
             return False
         expected_hex = signature[len("sha256=") :]
         computed_hex = hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
-        return hmac.compare_digest(expected_hex, computed_hex)
+        return hmac.compare_digest(expected_hex.encode("utf-8"), computed_hex.encode("utf-8"))
 
     def delivery_id(self, headers: Mapping[str, str]) -> str | None:
         return _get_header(headers, "X-GitHub-Delivery")
@@ -78,9 +78,12 @@ class GitHubProvider(VcsProvider):
         base_branch = pr.get("base", {}).get("ref", "")
         is_draft = bool(pr.get("draft", False))
         author_login = pr.get("user", {}).get("login", "")
-        updated_at = _parse_iso_datetime(pr.get("updated_at"))
+        raw_updated_at = pr.get("updated_at")
+        if not raw_updated_at:
+            raise ValueError("missing updated_at")
+        updated_at = _parse_iso_datetime(raw_updated_at)
         if updated_at is None:
-            updated_at = datetime.now(timezone.utc)
+            raise ValueError("missing updated_at")
         merged_at = _parse_iso_datetime(pr.get("merged_at"))
 
         return PullRequestEvent(
@@ -125,7 +128,10 @@ class GitHubProvider(VcsProvider):
         trimmed_pr: dict[str, Any] = {}
         for k in ("number", "title", "body", "html_url", "draft", "merged", "merged_at", "updated_at"):
             if k in pr:
-                trimmed_pr[k] = pr[k]
+                val = pr[k]
+                if k == "body" and isinstance(val, str) and len(val) > 65536:
+                    val = val[:65536]
+                trimmed_pr[k] = val
         if trimmed_user:
             trimmed_pr["user"] = trimmed_user
         if trimmed_head:

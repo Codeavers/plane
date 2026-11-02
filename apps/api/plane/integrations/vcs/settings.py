@@ -6,9 +6,35 @@ import copy
 import re
 import string
 
-# Guard against ReDoS: simple static check rejects groups quantified with +, * or {
-# that themselves contain + or *.
-NESTED_QUANTIFIER_RE = re.compile(r"\([^()]*[+*][^()]*\)[+*{]")
+try:
+    import re._parser as _re_parser
+except ImportError:
+    import sre_parse as _re_parser
+
+
+def _has_nested_quantifiers(pattern: str) -> bool:
+    try:
+        parsed = _re_parser.parse(pattern)
+    except Exception:
+        return False
+
+    repeat_ops = (getattr(_re_parser, "MAX_REPEAT", None), getattr(_re_parser, "MIN_REPEAT", None))
+
+    def walk(node: object, in_repeat: bool) -> bool:
+        if isinstance(node, tuple) and len(node) == 2 and node[0] in repeat_ops:
+            _, max_count, subpattern = node[1]
+            is_rep = max_count > 1
+            if in_repeat and is_rep:
+                return True
+            return walk(subpattern, in_repeat or is_rep)
+
+        if isinstance(node, (list, tuple)) or type(node).__name__ == "SubPattern":
+            for item in node:
+                if walk(item, in_repeat):
+                    return True
+        return False
+
+    return walk(parsed, False)
 
 ALLOWED_ACTIONS = frozenset(
     {
@@ -160,7 +186,7 @@ def compile_pattern(pattern: str, ignore_case: bool = False) -> re.Pattern:
     if len(pattern) > 200:
         raise SettingsError(f"pattern exceeds maximum length of 200 characters: {pattern}")
 
-    if NESTED_QUANTIFIER_RE.search(pattern):
+    if _has_nested_quantifiers(pattern):
         raise SettingsError(f"pattern contains unsafe nested quantifier: {pattern}")
 
     flags = re.IGNORECASE if ignore_case else 0
@@ -388,8 +414,12 @@ def validate_settings(data: dict, *, partial: bool = False) -> dict:
                 parsed = list(string.Formatter().parse(content))
             except ValueError as e:
                 raise SettingsError(f"comment_templates.{name}: invalid format string: {e}")
-            for _, field_name, _, _ in parsed:
+            for _, field_name, format_spec, conversion in parsed:
                 if field_name is not None:
+                    if format_spec or conversion:
+                        raise SettingsError(
+                            f"comment_templates.{name}: format specifiers and conversions are not allowed in placeholders"
+                        )
                     if field_name not in ALLOWED_TEMPLATE_PLACEHOLDERS:
                         raise SettingsError(f"comment_templates.{name}: unknown placeholder '{field_name}'")
             norm_templates[name] = content

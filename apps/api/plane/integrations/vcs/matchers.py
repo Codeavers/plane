@@ -20,6 +20,8 @@ class MatchedId:
     source: str
 
 
+MAX_IDS = 50
+
 SOURCE_FIELD_MAP = {
     "branch": "source_branch",
     "title": "title",
@@ -57,6 +59,8 @@ def extract_ids(event: PullRequestEvent, matchers: list[dict[str, Any]]) -> list
             if key not in seen:
                 seen.add(key)
                 results.append(MatchedId(identifier=ident, sequence_id=seq, source=source))
+                if len(results) >= MAX_IDS:
+                    return results
 
     return results
 

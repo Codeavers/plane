@@ -81,7 +81,7 @@ class SetState(Action):
         current_instance = json.dumps(IssueSerializer(issue).data, cls=DjangoJSONEncoder)
         issue.state = target
         issue.updated_by = actor
-        issue.save()
+        issue.save(update_fields=["state", "updated_by", "updated_at"])
 
         issue_activity.delay(
             type="issue.activity.updated",
