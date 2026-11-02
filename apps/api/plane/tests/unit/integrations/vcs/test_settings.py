@@ -53,13 +53,23 @@ class TestVcsSettingsValidation:
         compiled = compile_pattern(r"(?i:fixes|closes|resolves|refs)\s+([A-Z][A-Z0-9]{1,11})-(\d+)\b")
         assert compiled.groups == 2
 
-    def test_rejects_nested_quantifier_pattern(self):
+    @pytest.mark.parametrize(
+        "pattern",
+        [
+            r"(a+)+-(\d+)",
+            r"((a+))+-(\d+)",
+            r"(?:(a+))+-(\d+)",
+            r"(a*)*-(\d+)",
+            r"(a{1,5})+-(\d+)",
+        ],
+    )
+    def test_rejects_nested_quantifier_pattern(self, pattern):
         with pytest.raises(SettingsError) as exc_info:
-            compile_pattern(r"(a+)+-(\d+)")
+            compile_pattern(pattern)
         assert "nested quantifier" in str(exc_info.value)
 
         data = copy.deepcopy(DEFAULT_SETTINGS)
-        data["matchers"][0]["pattern"] = r"(a+)+-(\d+)"
+        data["matchers"][0]["pattern"] = pattern
         with pytest.raises(SettingsError) as exc_info:
             validate_settings(data)
         assert "matchers[0].pattern" in str(exc_info.value)
@@ -189,3 +199,21 @@ class TestVcsSettingsValidation:
         with pytest.raises(SettingsError) as exc_info:
             validate_settings(data)
         assert "rules[0].actions[0].fallback_group" in str(exc_info.value)
+
+    @pytest.mark.parametrize(
+        "template",
+        [
+            "{title:>999999999}",
+            "{title!r}",
+        ],
+    )
+    def test_template_placeholder_format_spec_or_conversion_rejected(self, template):
+        data = copy.deepcopy(DEFAULT_SETTINGS)
+        data["comment_templates"]["pr_opened"] = template
+        with pytest.raises(SettingsError) as exc_info:
+            validate_settings(data)
+        assert "pr_opened" in str(exc_info.value)
+
+        with pytest.raises(SettingsError) as partial_exc_info:
+            validate_settings({"comment_templates": {"pr_merged": template}}, partial=True)
+        assert "pr_merged" in str(partial_exc_info.value)

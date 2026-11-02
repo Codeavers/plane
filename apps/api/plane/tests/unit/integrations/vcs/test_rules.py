@@ -5,6 +5,7 @@
 import copy
 from dataclasses import FrozenInstanceError, is_dataclass
 from datetime import datetime, timezone
+import os
 
 import pytest
 
@@ -173,4 +174,39 @@ def test_action_override_uses_given_action():
         {"type": "set_state", "state": "In Review", "fallback_group": "started"},
         {"type": "comment", "template": "pr_opened"},
         {"type": "comment", "template": "pr_closed"},
+    ]
+
+
+@pytest.mark.unit
+def test_base_branch_matching_is_case_sensitive(monkeypatch):
+    # Simulate a case-insensitive OS where os.path.normcase lowercases branch names.
+    monkeypatch.setattr(os.path, "normcase", str.lower)
+
+    upper_main_ctx = RuleContext(
+        event=_make_event(action="merged", base_branch="Main"),
+        current_state_group="started",
+        all_linked_merged=True,
+        base_branches=["main"],
+    )
+    assert select_actions(DEFAULT_SETTINGS, upper_main_ctx) == []
+
+    glob_settings = copy.deepcopy(DEFAULT_SETTINGS)
+    glob_settings["base_branches"] = ["release/*"]
+    upper_glob_ctx = RuleContext(
+        event=_make_event(action="merged", base_branch="Release/1.0"),
+        current_state_group="started",
+        all_linked_merged=True,
+        base_branches=glob_settings["base_branches"],
+    )
+    assert select_actions(glob_settings, upper_glob_ctx) == []
+
+    exact_main_ctx = RuleContext(
+        event=_make_event(action="merged", base_branch="main"),
+        current_state_group="started",
+        all_linked_merged=True,
+        base_branches=["main"],
+    )
+    assert select_actions(DEFAULT_SETTINGS, exact_main_ctx) == [
+        {"type": "set_state", "state": "Done", "fallback_group": "completed"},
+        {"type": "comment", "template": "pr_merged"},
     ]

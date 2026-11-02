@@ -236,3 +236,47 @@ def test_registry_returns_github():
 
     with pytest.raises(KeyError):
         registry.get("nonexistent_provider")
+
+
+@pytest.mark.unit
+def test_verify_rejects_non_ascii_signature():
+    provider = GitHubProvider()
+    body = b'{"action": "opened"}'
+    secret = "whsec_test_secret_123"
+
+    assert provider.verify({"X-Hub-Signature-256": "sha256=é"}, body, secret) is False
+
+
+@pytest.mark.unit
+def test_trim_payload_caps_body_length():
+    provider = GitHubProvider()
+    headers = {"X-GitHub-Event": "pull_request"}
+
+    oversized_payload = copy.deepcopy(_load_fixture("opened"))
+    oversized_payload["pull_request"]["body"] = "x" * 70_000
+    trimmed = provider.trim_payload(headers, oversized_payload)
+    assert len(trimmed["pull_request"]["body"]) == 65_536
+    assert trimmed["pull_request"]["body"] == "x" * 65_536
+
+    null_body_payload = copy.deepcopy(_load_fixture("opened"))
+    null_body_payload["pull_request"]["body"] = None
+    trimmed_null = provider.trim_payload(headers, null_body_payload)
+    parsed_null = provider.parse(headers, trimmed_null)
+    assert isinstance(parsed_null, PullRequestEvent)
+    assert parsed_null.body == ""
+
+
+@pytest.mark.unit
+def test_parse_missing_updated_at_raises_value_error():
+    provider = GitHubProvider()
+    headers = {"X-GitHub-Event": "pull_request"}
+
+    missing_payload = copy.deepcopy(_load_fixture("opened"))
+    del missing_payload["pull_request"]["updated_at"]
+    with pytest.raises(ValueError, match="missing updated_at"):
+        provider.parse(headers, missing_payload)
+
+    null_payload = copy.deepcopy(_load_fixture("opened"))
+    null_payload["pull_request"]["updated_at"] = None
+    with pytest.raises(ValueError, match="missing updated_at"):
+        provider.parse(headers, null_payload)

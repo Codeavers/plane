@@ -124,3 +124,28 @@ def test_body_requires_keyword_by_default():
         MatchedId(identifier="CODEA", sequence_id=3, source="body"),
         MatchedId(identifier="CODEA", sequence_id=4, source="body"),
     ]
+
+
+@pytest.mark.unit
+def test_extract_ids_caps_at_max_ids():
+    body = "\n".join(f"Fixes CODEA-{i}" for i in range(1, 61))
+    matched = extract_ids(_make_event(body=body), DEFAULT_SETTINGS["matchers"])
+    assert len(matched) == 50
+    assert matched == [MatchedId(identifier="CODEA", sequence_id=i, source="body") for i in range(1, 51)]
+
+    ordered = extract_ids(
+        _make_event(
+            source_branch="feat/CODEA-100-branch",
+            title="feat: CODEA-101",
+            body=body,
+        ),
+        DEFAULT_SETTINGS["matchers"],
+    )
+    assert len(ordered) == 50
+    assert ordered[0] == MatchedId(identifier="CODEA", sequence_id=100, source="branch")
+    assert ordered[1] == MatchedId(identifier="CODEA", sequence_id=101, source="title")
+    assert ordered[2:] == [MatchedId(identifier="CODEA", sequence_id=i, source="body") for i in range(1, 49)]
+
+    from plane.integrations.vcs.matchers import MAX_IDS
+
+    assert MAX_IDS == 50

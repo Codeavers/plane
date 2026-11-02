@@ -343,3 +343,35 @@ def test_comment_not_duplicated_for_same_event(
     )
     assert merged_result.status == "applied"
     assert IssueComment.objects.filter(issue=issue).count() == 2
+
+
+@pytest.mark.contract
+@pytest.mark.django_db
+def test_set_state_preserves_concurrent_name_change(
+    project, project_states, connection, create_user, create_bot_user, mock_issue_activity
+):
+    issue = Issue.objects.create(
+        name="Original work item name",
+        workspace=project.workspace,
+        project=project,
+        state=project_states["Todo"],
+        created_by=create_user,
+    )
+    Issue.objects.filter(pk=issue.pk).update(name="Concurrent work item name")
+
+    action = SetState(state="Done", fallback_group="completed")
+    result = action.execute(
+        issue,
+        _make_event(action="merged"),
+        actor=create_bot_user,
+        connection=connection,
+        templates=DEFAULT_SETTINGS["comment_templates"],
+    )
+
+    assert result.type == "set_state"
+    assert result.status == "applied"
+
+    issue.refresh_from_db()
+    assert issue.name == "Concurrent work item name"
+    assert issue.state_id == project_states["Done"].id
+    assert issue.completed_at is not None
