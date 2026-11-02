@@ -36,6 +36,7 @@ def _has_nested_quantifiers(pattern: str) -> bool:
 
     return walk(parsed, False)
 
+
 ALLOWED_ACTIONS = frozenset(
     {
         "opened",
@@ -418,7 +419,8 @@ def validate_settings(data: dict, *, partial: bool = False) -> dict:
                 if field_name is not None:
                     if format_spec or conversion:
                         raise SettingsError(
-                            f"comment_templates.{name}: format specifiers and conversions are not allowed in placeholders"
+                            f"comment_templates.{name}: format specifiers and conversions "
+                            "are not allowed in placeholders"
                         )
                     if field_name not in ALLOWED_TEMPLATE_PLACEHOLDERS:
                         raise SettingsError(f"comment_templates.{name}: unknown placeholder '{field_name}'")

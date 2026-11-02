@@ -28,7 +28,6 @@ from plane.db.models.vcs import (
 from plane.integrations.vcs.bot import create_bot_user
 from plane.integrations.vcs.events import PullRequestEvent
 from plane.integrations.vcs.matchers import extract_ids, resolve_work_items
-from plane.integrations.vcs.providers.registry import registry
 from plane.integrations.vcs.serializers import (
     VcsConnectionSerializer,
     VcsDeliverySerializer,
@@ -83,9 +82,7 @@ class VcsConnectionEndpoint(BaseAPIView):
             conn = serializer.save(workspace=workspace, bot_user=bot_user)
             data = dict(serializer.data)
             data["secret"] = conn.secret
-            data["webhook_url"] = (
-                f"{request.build_absolute_uri('/')}api/integrations/vcs/{conn.provider}/{conn.id}/"
-            )
+            data["webhook_url"] = f"{request.build_absolute_uri('/')}api/integrations/vcs/{conn.provider}/{conn.id}/"
             return Response(data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 

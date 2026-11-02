@@ -225,9 +225,7 @@ def test_deliveries_list_scoped_to_workspace(session_client, workspace, create_u
         status=VcsDelivery.STATUS_PROCESSED,
     )
 
-    foreign_resp = session_client.get(
-        f"/api/workspaces/{workspace.slug}/vcs-connections/{other_conn.id}/deliveries/"
-    )
+    foreign_resp = session_client.get(f"/api/workspaces/{workspace.slug}/vcs-connections/{other_conn.id}/deliveries/")
     assert foreign_resp.status_code == status.HTTP_404_NOT_FOUND
 
     own_resp = session_client.get(f"/api/workspaces/{workspace.slug}/vcs-connections/{own_conn.id}/deliveries/")
