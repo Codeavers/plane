@@ -50,6 +50,7 @@ from .parameters import (
     ESTIMATE_ID_PARAMETER,
     PAGE_ID_PARAMETER,
     WORK_ITEM_PAGE_ID_PARAMETER,
+    PQL_PARAMETER,
 )
 
 # Responses
@@ -226,6 +227,7 @@ __all__ = [
     "ESTIMATE_ID_PARAMETER",
     "PAGE_ID_PARAMETER",
     "WORK_ITEM_PAGE_ID_PARAMETER",
+    "PQL_PARAMETER",
     # Responses
     "UNAUTHORIZED_RESPONSE",
     "FORBIDDEN_RESPONSE",
