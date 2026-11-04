@@ -3,13 +3,15 @@
 # See the LICENSE file for details.
 
 from .user import UserLiteSerializer
-from .workspace import WorkspaceLiteSerializer
+from .workspace import WorkspaceLiteSerializer, WorkspaceFeatureSerializer
 from .project import (
     ProjectSerializer,
     ProjectLiteSerializer,
     ProjectCreateSerializer,
     ProjectUpdateSerializer,
+    ProjectFeatureSerializer,
 )
+from .issue_type import IssueTypeSerializer, WorkItemTypeSerializer
 from .issue import (
     IssueSerializer,
     LabelCreateUpdateSerializer,
@@ -53,6 +55,7 @@ from .intake import (
     IntakeIssueSerializer,
     IntakeIssueCreateSerializer,
     IntakeIssueUpdateSerializer,
+    IntakeIssueStatusUpdateSerializer,
 )
 from .estimate import EstimateSerializer, EstimatePointSerializer
 from .asset import (
@@ -67,5 +70,6 @@ from .member import (
     ProjectMemberSerializer,
     WorkspaceMemberLiteAPISerializer,
     ProjectMemberLiteAPISerializer,
+    RoleSerializer,
 )
 from .sticky import StickySerializer
