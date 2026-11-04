@@ -11,7 +11,7 @@ import plane.db.models.api
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("db", "0125_reset_project_deploy_board_identity"),
+        ("db", "0126_issuepage"),
     ]
 
     operations = [
