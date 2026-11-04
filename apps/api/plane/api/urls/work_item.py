@@ -25,6 +25,8 @@ from plane.api.views import (
     WorkItemCustomRelationDetailAPIEndpoint,
     WorkItemRelationDefinitionListAPIEndpoint,
     IssueArchiveUnarchiveAPIEndpoint,
+    IssuePageListCreateAPIEndpoint,
+    IssuePageDetailAPIEndpoint,
 )
 
 # Deprecated url patterns
@@ -202,6 +204,16 @@ new_url_patterns = [
         "workspaces/<str:slug>/projects/<uuid:project_id>/work-items/<uuid:issue_id>/work-item-relations/<uuid:related_issue_id>/",
         WorkItemCustomRelationDetailAPIEndpoint.as_view(http_method_names=["delete"]),
         name="work-item-custom-relation-detail",
+    ),
+    path(
+        "workspaces/<str:slug>/projects/<uuid:project_id>/work-items/<uuid:issue_id>/pages/",
+        IssuePageListCreateAPIEndpoint.as_view(http_method_names=["get", "post"]),
+        name="work-item-page-list",
+    ),
+    path(
+        "workspaces/<str:slug>/projects/<uuid:project_id>/work-items/<uuid:issue_id>/pages/<uuid:pk>/",
+        IssuePageDetailAPIEndpoint.as_view(http_method_names=["get", "delete"]),
+        name="work-item-page-detail",
     ),
 ]
 
