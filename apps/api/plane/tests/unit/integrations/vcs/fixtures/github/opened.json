@@ -1,0 +1,48 @@
+{
+  "action": "opened",
+  "number": 42,
+  "pull_request": {
+    "id": 1900000042,
+    "node_id": "PR_kwDOExample42",
+    "number": 42,
+    "state": "open",
+    "locked": false,
+    "title": "feat(vcs): CODEA-40 add GitHub webhook sync",
+    "body": "Fixes CODEA-40\n\nSyncs pull request events.",
+    "html_url": "https://github.com/Codeavers/plane/pull/42",
+    "diff_url": "https://github.com/Codeavers/plane/pull/42.diff",
+    "draft": false,
+    "merged": false,
+    "merged_at": null,
+    "created_at": "2026-10-29T10:00:00Z",
+    "updated_at": "2026-10-29T10:00:00Z",
+    "commits": 3,
+    "user": {
+      "login": "octocat",
+      "id": 583231,
+      "avatar_url": "https://avatars.githubusercontent.com/u/583231?v=4",
+      "type": "User"
+    },
+    "head": {
+      "label": "Codeavers:feat/CODEA-40-github-sync",
+      "ref": "feat/CODEA-40-github-sync",
+      "sha": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"
+    },
+    "base": {
+      "label": "Codeavers:develop",
+      "ref": "develop",
+      "sha": "00112233445566778899aabbccddeeff00112233"
+    }
+  },
+  "repository": {
+    "id": 800000001,
+    "name": "plane",
+    "full_name": "Codeavers/plane",
+    "private": true,
+    "html_url": "https://github.com/Codeavers/plane"
+  },
+  "sender": {
+    "login": "octocat",
+    "id": 583231
+  }
+}

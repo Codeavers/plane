@@ -1,0 +1,28 @@
+{
+  "zen": "Design for failure.",
+  "hook_id": 490000001,
+  "hook": {
+    "type": "Organization",
+    "id": 490000001,
+    "name": "web",
+    "active": true,
+    "events": [
+      "pull_request"
+    ],
+    "config": {
+      "content_type": "json",
+      "insecure_ssl": "0",
+      "url": "https://tasks.codeaver.com/api/integrations/vcs/github/00000000-0000-0000-0000-000000000000/"
+    }
+  },
+  "repository": {
+    "id": 800000001,
+    "name": "plane",
+    "full_name": "Codeavers/plane",
+    "private": true
+  },
+  "sender": {
+    "login": "octocat",
+    "id": 583231
+  }
+}
